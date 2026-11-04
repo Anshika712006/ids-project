@@ -1,14 +1,23 @@
 import streamlit as st, pandas as pd, numpy as np, joblib
-from tensorflow import keras
 
 st.set_page_config(page_title="Explainable AI IDS", layout="wide")
 
 @st.cache_resource
 def load():
-    ae = keras.models.load_model("ae_model.keras")
-    return ae, joblib.load("scaler.pkl"), joblib.load("features.pkl"), float(np.load("threshold.npy"))
+    w = np.load("ae_weights.npz")
+    W = [w["arr_%d" % i] for i in range(12)]
+    s = np.load("scaler_params.npz")
+    feat = joblib.load("features.pkl")
+    thr = float(np.load("threshold.npy"))
+    return W, s["scale"], s["min"], feat, thr
 
-ae, scaler, feat, thr = load()
+W, sc, mn, feat, thr = load()
+
+def forward(X):
+    h = X
+    for i in range(0, 10, 2):
+        h = np.maximum(h @ W[i] + W[i + 1], 0)
+    return 1 / (1 + np.exp(-(h @ W[10] + W[11])))
 
 st.title("Explainable AI-Based Intrusion Detection")
 st.caption("Autoencoder trained only on normal traffic. Alerts are explained by feature-wise reconstruction error.")
@@ -26,10 +35,9 @@ with tab1:
             df = pd.read_csv(up)
 
     if df is not None:
-        X = df.reindex(columns=feat, fill_value=0).astype("float32")
-        Xs = np.clip(scaler.transform(X), 0, 1)
-        rec = ae.predict(Xs, verbose=0)
-        ferr = (Xs - rec) ** 2
+        X = df.reindex(columns=feat, fill_value=0).astype("float64").values
+        Xs = np.clip(X * sc + mn, 0, 1)
+        ferr = (Xs - forward(Xs)) ** 2
         score = ferr.mean(axis=1)
         df["score"] = score.round(4)
         df["status"] = np.where(score > thr, "ALERT", "Normal")
